@@ -5,24 +5,38 @@
 #include <ctype.h>
 #include <unistd.h>
 #include <termios.h>
-#include <time.h>
+#include <sys/ioctl.h>
 
 
-#define ENTRY_MAX   512
-#define ENTRIES_MAX 512
-#define PATTERN_MAX 512
+#define ENTRY_MAX     512
+#define ENTRIES_MAX   512
+#define PATTERN_MAX   512
 
 #define KEY_DOWN      0x425B1B
 #define KEY_UP        0x415B1B
 #define KEY_ENTER     0xD
 #define KEY_CTRLC     0x03
 #define KEY_BACKSPACE 0x7F
-#define USAGE_STR "usage: cmenu <OUTPUT_FILE> [-r|--remove]"
+#define USAGE_STR     "usage: cmenu <OUTPUT_FILE> [-r|--remove]"
+
+#define ERROR_EXIT(msg) \
+    do { puts(msg); exit(EXIT_FAILURE); } while (0)
 
 
-void exit_with(char* msg) {
-    puts(msg);
-    exit(1);
+void restore_terminal_mode(void);
+
+
+char** g_entries       = NULL;
+char** g_matches       = NULL;
+int    g_entries_len   = 0;
+int    g_matches_len   = 0;
+int    g_selected      = 0;
+int    g_height        = 0;
+struct termios g_termios_original;
+
+
+void clear_screen(void) {
+    system("clear");
 }
 
 
@@ -37,18 +51,16 @@ int read_entry(char** dest) {
         if (ch != '\n' && i < (ENTRY_MAX - 1)) {
             buf[i++] = ch;
         } else {
-            buf[i] = '\0';
-            *dest = strdup(buf);
-            return 0;
+            break;
         }
     }
 
-    return 1;
-}
+    if (i > 0) {
+        buf[i] = '\0';
+        *dest = strdup(buf);
+    }
 
-
-void clear_screen(void) {
-    system("clear");
+    return ch == EOF ? 1 : 0;
 }
 
 
@@ -67,14 +79,6 @@ bool is_match(char* pattern, char* str) {
 }
 
 
-char** g_entries       = NULL;
-char** g_matches       = NULL;
-int    g_entries_len   = 0;
-int    g_matches_len   = 0;
-int    g_selected      = 0;
-struct termios g_termios_original;
-
-
 void restore_terminal_mode(void) {
     tcsetattr(0, TCSANOW, &g_termios_original);
 }
@@ -91,7 +95,7 @@ void set_terminal_mode(void) {
 }
 
 
-int key_pressed(void) {
+bool key_pressed(void) {
     fd_set fds;
     struct timeval tv;
 
@@ -108,17 +112,22 @@ int key_pressed(void) {
 void read_entries(void) {
     char* entries[ENTRIES_MAX];
     char* entry;
-    int   i, size;
+    int   i, size, code;
 
     i = 0;
-    while ( (read_entry(&entry) == 0) ) {
+    while (1) {
+        code = read_entry(&entry);
+
         if (i > ENTRIES_MAX - 1)
-            exit_with("Too many entries.");
+            ERROR_EXIT("Too many entries.");
 
         if (entry) {
             entries[i++] = entry;
             size += sizeof(char**);
         }
+
+        if (code)
+            break;
     }
 
     g_entries     = malloc(size);
@@ -126,15 +135,15 @@ void read_entries(void) {
     g_entries_len = i;
 
     if ( !(g_entries && g_matches) )
-        exit_with("malloc failed");
+        ERROR_EXIT("malloc failed");
 
     memcpy(g_entries, entries, size);
     freopen("/dev/tty", "r", stdin);
 }
 
 
-int clamp(int n) {
-    return (n < 0) ? 0 : n >= g_matches_len ? g_matches_len - 1 : n;
+void set_selected_clamped(int n) {
+    g_selected =  ((n < 0) ? 0 : n >= g_matches_len ? g_matches_len - 1 : n);
 }
 
 
@@ -156,14 +165,24 @@ int getch(void) {
 
 
 void draw(char* pattern) {
-    int i;
+    int i, j;
 
     update_matches(pattern);
-    g_selected = clamp(g_selected);
+    set_selected_clamped(g_selected);
     clear_screen();
 
     printf(">%s\n", pattern);
-    for (i = 0; i < g_matches_len; ++i) {
+
+    if (g_selected > g_height - 3) {
+        i = g_selected - (g_height - 3);
+    } else {
+        i = 0;
+    }
+
+    for (j = 0; i < g_matches_len; ++i) {
+        if (++j == g_height - 1)
+            break;
+
         printf("%s%s\n", g_matches[i], i == g_selected ? " (*)" : "");
     }
 }
@@ -174,7 +193,21 @@ bool ch_isvalid(char ch) {
 }
 
 
-#define USAGE_STR "usage: cmenu <OUTPUT_FILE> [-r|--remove]"
+void select_next(void) {
+    set_selected_clamped(--g_selected);
+}
+
+
+void select_prev(void) {
+    set_selected_clamped(++g_selected);
+}
+
+
+void get_terminal_height(void) {
+    struct winsize w;
+    ioctl(0, TIOCGWINSZ, &w);
+    g_height = w.ws_row;
+}
 
 
 int main(int argc, char** argv) {
@@ -191,7 +224,7 @@ int main(int argc, char** argv) {
     case 3:
         if (strcmp(argv[2], "-r") == 0 || strcmp(argv[2], "--remove") == 0) {
             if (access(argv[1], F_OK) == -1)
-                exit_with("file does not exist");
+                ERROR_EXIT("file does not exist");
 
             if ( (fp = fopen(argv[1], "r")) ) {
                 while ((ch = fgetc(fp)) != EOF)
@@ -201,16 +234,17 @@ int main(int argc, char** argv) {
             }
 
             unlink(argv[1]);
-            return 0;
+            return EXIT_SUCCESS;
         } else {
-            exit_with(USAGE_STR);
+            ERROR_EXIT(USAGE_STR);
         }
 
     default:
-        exit_with(USAGE_STR);
+        ERROR_EXIT(USAGE_STR);
     }
 
     read_entries();
+    get_terminal_height();
     draw("");
     set_terminal_mode();
 
@@ -220,9 +254,9 @@ int main(int argc, char** argv) {
         if (key_pressed()) {
             switch (ch = getch())
             {
-            case KEY_UP:    g_selected = clamp(--g_selected); break;
-            case KEY_DOWN:  g_selected = clamp(++g_selected); break;
             case KEY_CTRLC: goto end;
+            case KEY_UP:    select_next(); break;
+            case KEY_DOWN:  select_prev(); break;
             case KEY_BACKSPACE:
                 if ((pattern_len - 1) > -1)
                     --pattern_len;
@@ -239,7 +273,7 @@ int main(int argc, char** argv) {
                 if (ch_isvalid(ch)) {
                     pattern[pattern_len++] = ch;
                     if (pattern_len >= PATTERN_MAX - 1)
-                        exit_with("pattern too long");
+                        ERROR_EXIT("pattern too long");
 
                     pattern[pattern_len] = '\0';
                 } else {
@@ -256,7 +290,7 @@ int main(int argc, char** argv) {
 end:
     if (selected_entry) {
         if (access(argv[1], F_OK) != -1)
-            exit_with("file already exists");
+            ERROR_EXIT("file already exists");
 
         if ( (fp = fopen(argv[1], "w+")) ) {
             fputs(selected_entry, fp);
@@ -265,5 +299,5 @@ end:
     }
 
     restore_terminal_mode();
-    return 0;
+    return EXIT_SUCCESS;
 }
