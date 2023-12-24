@@ -23,9 +23,6 @@
     do { puts(msg); exit(EXIT_FAILURE); } while (0)
 
 
-void restore_terminal_mode(void);
-
-
 char** g_entries       = NULL;
 char** g_matches       = NULL;
 int    g_entries_len   = 0;
