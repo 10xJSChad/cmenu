@@ -17,7 +17,6 @@ Limitations:
 ```
 usage:
     cmenu
-    (you're going to have to pipe some entries into it.)
 
 building:
     cc cmenu.c
