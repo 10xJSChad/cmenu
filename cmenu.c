@@ -5,11 +5,11 @@
 #include <ctype.h>
 #include <unistd.h>
 #include <termios.h>
+#include <fcntl.h>
 #include <sys/ioctl.h>
 
 
 #define ENTRY_MAX     512
-#define ENTRIES_MAX   512
 #define PATTERN_MAX   512
 
 #define KEY_DOWN      0x425B1B
@@ -17,7 +17,7 @@
 #define KEY_ENTER     0xD
 #define KEY_CTRLC     0x03
 #define KEY_BACKSPACE 0x7F
-#define USAGE_STR     "usage: cmenu <OUTPUT_FILE> [-r|--remove]"
+#define USAGE_STR     "usage: cmenu <OUTPUT_FILE>"
 
 #define ERROR_EXIT(msg) \
     do { puts(msg); exit(EXIT_FAILURE); } while (0)
@@ -29,12 +29,8 @@ int    g_entries_len   = 0;
 int    g_matches_len   = 0;
 int    g_selected      = 0;
 int    g_height        = 0;
+int    g_terminal      = 0;
 struct termios g_termios_original;
-
-
-void clear_screen(void) {
-    system("clear");
-}
 
 
 int read_entry(char** dest) {
@@ -61,11 +57,18 @@ int read_entry(char** dest) {
 }
 
 
+char xtolower(char c) {
+    return ((unsigned) c - 'A' < 26) ? c + 'a' - 'A' : c;
+}
+
+
 bool is_match(char* pattern, char* str) {
     if (*pattern == '\0')
         return true;
 
-    while ((tolower(*(pattern++)) == tolower(*(str++)))) {
+    /* Pattern could be lowercased just once when reading but that
+       makes it display in lowercase too, which I don't want. */
+    while ((xtolower(*(pattern++)) == xtolower(*(str++)))) {
         if (*pattern == '\0')
             return true;
         else if (*str == '\0')
@@ -92,42 +95,46 @@ void set_terminal_mode(void) {
 }
 
 
-bool key_pressed(void) {
-    fd_set fds;
-    struct timeval tv;
+void write_str(int fd, char* str) {
+    int len = strlen(str);
 
-    tv.tv_sec  = 0;
-    tv.tv_usec = 0;
-
-    FD_ZERO(&fds);
-    FD_SET(0, &fds);
-
-    return select(1, &fds, NULL, NULL, &tv) > 0;
+    if (write(fd, str, len) != len)
+        ERROR_EXIT("write failed");
 }
 
 
-void read_entries(void) {
-    char* entries[ENTRIES_MAX];
-    char* entry;
-    int   i, size, code;
+void clear_screen(void) {
+    write_str(g_terminal, "\x1b[H\x1b[2J\x1b[3J");
+}
 
-    i = 0;
+
+void read_entires(void) {
+    char** entries;
+    char*  entry;
+    size_t i, size, code;
+
+    i = size = 0;
     while (1) {
         code = read_entry(&entry);
 
-        if (i > ENTRIES_MAX - 1)
-            ERROR_EXIT("Too many entries.");
-
         if (entry) {
-            entries[i++] = entry;
-            size += sizeof(char**);
+            if (++i * sizeof(char**) > size) {
+                /* just allocate 10 more entries every time */
+                size += sizeof(char**) * 10;
+                entries = realloc(entries, size);
+
+                if (!entries)
+                    ERROR_EXIT("realloc failed");
+            }
+
+            entries[i - 1] = entry;
         }
 
         if (code)
             break;
     }
 
-    g_entries     = malloc(size);
+    g_entries     = entries;
     g_matches     = malloc(size);
     g_entries_len = i;
 
@@ -157,7 +164,7 @@ void update_matches(char* pattern) {
 
 int getch(void) {
     char buf[4] = {0};
-    return (read(0, buf, 4) != -1) ? *(int*) buf : -1;
+    return (read(g_terminal, buf, 4) != -1) ? *(int*) buf : -1;
 }
 
 
@@ -168,7 +175,9 @@ void draw(char* pattern) {
     set_selected_clamped(g_selected);
     clear_screen();
 
-    printf(">%s\n", pattern);
+    write_str(g_terminal, ">");
+    write_str(g_terminal, pattern);
+    write_str(g_terminal, "\n");
 
     if (g_selected > g_height - 3) {
         i = g_selected - (g_height - 3);
@@ -180,7 +189,8 @@ void draw(char* pattern) {
         if (++j == g_height - 1)
             break;
 
-        printf("%s%s\n", g_matches[i], i == g_selected ? " (*)" : "");
+        write_str(g_terminal, g_matches[i]);
+        write_str(g_terminal, i == g_selected ? " (*)\n" : "\n");
     }
 }
 
@@ -207,40 +217,17 @@ void get_terminal_height(void) {
 }
 
 
-int main(int argc, char** argv) {
-    FILE* fp;
+int main(void) {
     char  pattern[PATTERN_MAX];
     char* selected_entry;
     int   ch, pattern_len;
 
-    switch (argc)
-    {
-    case 2:
-        break;
+    g_terminal = open("/dev/tty", O_RDWR);
 
-    case 3:
-        if (strcmp(argv[2], "-r") == 0 || strcmp(argv[2], "--remove") == 0) {
-            if (access(argv[1], F_OK) == -1)
-                ERROR_EXIT("file does not exist");
+    if (g_terminal == -1)
+        ERROR_EXIT("open failed");
 
-            if ( (fp = fopen(argv[1], "r")) ) {
-                while ((ch = fgetc(fp)) != EOF)
-                    putchar(ch);
-
-                fclose(fp);
-            }
-
-            unlink(argv[1]);
-            return EXIT_SUCCESS;
-        } else {
-            ERROR_EXIT(USAGE_STR);
-        }
-
-    default:
-        ERROR_EXIT(USAGE_STR);
-    }
-
-    read_entries();
+    read_entires();
     get_terminal_height();
     draw("");
     set_terminal_mode();
@@ -248,53 +235,46 @@ int main(int argc, char** argv) {
     ch = pattern_len = 0;
     selected_entry = NULL;
     while (1) {
-        if (key_pressed()) {
-            switch (ch = getch())
-            {
-            case KEY_CTRLC: goto end;
-            case KEY_UP:    select_next(); break;
-            case KEY_DOWN:  select_prev(); break;
-            case KEY_BACKSPACE:
-                if ((pattern_len - 1) > -1)
-                    --pattern_len;
+        switch (ch = getch())
+        {
+        case KEY_CTRLC: goto end;
+        case KEY_UP:    select_next(); break;
+        case KEY_DOWN:  select_prev(); break;
+        case KEY_BACKSPACE:
+            if ((pattern_len - 1) > -1)
+                --pattern_len;
+
+            pattern[pattern_len] = '\0';
+            break;
+        case KEY_ENTER:
+            if (g_matches_len > 0)
+                selected_entry = g_matches[g_selected];
+
+            goto end;
+
+        default:
+            if (ch_isvalid(ch)) {
+                pattern[pattern_len++] = ch;
+                if (pattern_len >= PATTERN_MAX - 1)
+                    ERROR_EXIT("pattern too long");
 
                 pattern[pattern_len] = '\0';
-                break;
-            case KEY_ENTER:
-                if (g_matches_len > 0)
-                    selected_entry = g_matches[g_selected];
-
-                goto end;
-
-            default:
-                if (ch_isvalid(ch)) {
-                    pattern[pattern_len++] = ch;
-                    if (pattern_len >= PATTERN_MAX - 1)
-                        ERROR_EXIT("pattern too long");
-
-                    pattern[pattern_len] = '\0';
-                } else {
-                    continue;
-                }
+            } else {
+                continue;
             }
-
-            restore_terminal_mode();
-            draw(pattern_len == 0 ? "" : pattern);
-            set_terminal_mode();
         }
+
+        restore_terminal_mode();
+        draw(pattern_len == 0 ? "" : pattern);
+        set_terminal_mode();
     }
 
 end:
-    if (selected_entry) {
-        if (access(argv[1], F_OK) != -1)
-            ERROR_EXIT("file already exists");
-
-        if ( (fp = fopen(argv[1], "w+")) ) {
-            fputs(selected_entry, fp);
-            fclose(fp);
-        }
-    }
-
+    clear_screen();
     restore_terminal_mode();
+
+    if (selected_entry)
+        write_str(STDOUT_FILENO, selected_entry);
+
     return EXIT_SUCCESS;
 }
