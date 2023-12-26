@@ -10,8 +10,6 @@ The selected entry is printed to stdout.
 An example script is provided in this repository, the script covers all you need to know, as ```cmenu``` has no additional features other than what you see in the example script.
 
 Limitations:
-* The length of each entry is limited, although the limit is way beyond what's required for the vast majority of use cases I can think of. Nevertheless, it can be increased by changing the ```ENTRY_MAX``` constant in cmenu.c.
-
 * The pattern matching is very barebones, it matches from the start of each entry, so "orang" will match "orange", but "rang" will not.
 
 ```
