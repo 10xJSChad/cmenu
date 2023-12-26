@@ -289,7 +289,7 @@ int main(void) {
     }
 
 end:
-    // clear_screen();
+    clear_screen();
     restore_terminal_mode();
 
     if (selected_entry)
