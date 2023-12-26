@@ -8,9 +8,8 @@
 #include <sys/ioctl.h>
 
 
-#define ENTRY_MAX     512
 #define PATTERN_MAX   512
-#define READ_SIZE     12
+#define READ_SIZE     512
 
 #define KEY_DOWN      0x425B1B
 #define KEY_UP        0x415B1B
