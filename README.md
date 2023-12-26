@@ -10,7 +10,7 @@ The selected entry is printed to stdout.
 An example script is provided in this repository, the script covers all you need to know, as ```cmenu``` has no additional features other than what you see in the example script.
 
 Limitations:
-* The pattern matching is very barebones, it matches from the start of each entry, so "orang" will match "orange", but "rang" will not.
+* The pattern matching is very barebones, it matches from the start of each entry, so "orang" will match "orange", but "rang" will not. Additionally, it's ascii only.
 
 ```
 usage:
