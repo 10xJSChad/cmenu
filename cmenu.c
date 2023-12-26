@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
-#include <ctype.h>
 #include <unistd.h>
 #include <termios.h>
 #include <fcntl.h>
@@ -11,12 +10,14 @@
 
 #define ENTRY_MAX     512
 #define PATTERN_MAX   512
+#define READ_SIZE     12
 
 #define KEY_DOWN      0x425B1B
 #define KEY_UP        0x415B1B
 #define KEY_ENTER     0xD
 #define KEY_CTRLC     0x03
 #define KEY_BACKSPACE 0x7F
+
 #define USAGE_STR     "usage: cmenu <OUTPUT_FILE>"
 
 
@@ -34,27 +35,71 @@ bool   g_term_changed  = false;
 struct termios g_termios_original;
 
 
-int read_entry(char** dest) {
-    char buf[ENTRY_MAX];
-    char ch;
-    int  i;
+char* read_stdin(void) {
+    char* buf;
+    ssize_t size, offset, r;
 
-    i = 0;
-    *dest = NULL;
-    while ((ch = fgetc(stdin)) != EOF) {
-        if (ch != '\n' && i < (ENTRY_MAX - 1)) {
-            buf[i++] = ch;
-        } else {
+    size = 0;
+    buf = NULL;
+    while (1) {
+        offset = size;
+        size += READ_SIZE;
+
+        if ((buf = realloc(buf, size + 1)) == NULL)
+            error_exit("realloc failed");
+
+        r = read(STDIN_FILENO, buf + offset, READ_SIZE);
+        if (r != READ_SIZE) {
+            if (r == -1)
+                error_exit("read failed");
+
+            buf[offset + r] = '\0';
             break;
         }
+    };
+
+    return buf;
+}
+
+
+void read_entries(void) {
+    char*  left;
+    char*  right;
+    char** entries;
+    size_t i, size;
+
+    left = read_stdin();
+    right = left;
+
+    i = size = 0;
+    entries = NULL;
+    while (*right) {
+        if (*right == '\n') {
+            *right = '\0';
+            if (++i * sizeof(char**) > size) {
+                /* just allocate 10 more entries every time */
+                size += sizeof(char**) * 10;
+                entries = realloc(entries, size);
+
+                if (!entries)
+                    error_exit("realloc failed");
+            }
+
+            entries[i - 1] = left;
+            left = right + 1;
+        }
+
+        ++right;
     }
 
-    if (i > 0) {
-        buf[i] = '\0';
-        *dest = strdup(buf);
-    }
+    g_entries     = entries;
+    g_matches     = malloc(size);
+    g_entries_len = i;
 
-    return ch == EOF ? 1 : 0;
+    if (g_matches == NULL)
+        error_exit("malloc failed");
+
+    freopen("/dev/tty", "r", stdin);
 }
 
 
@@ -117,44 +162,6 @@ void error_exit(char* msg) {
 
 void clear_screen(void) {
     termwrite("\x1b[H\x1b[2J\x1b[3J");
-}
-
-
-void read_entires(void) {
-    char** entries;
-    char*  entry;
-    size_t i, size, code;
-
-    i = size = 0;
-    while (1) {
-        code = read_entry(&entry);
-
-        if (entry) {
-            if (++i * sizeof(char**) > size) {
-                /* just allocate 10 more entries every time */
-                size += sizeof(char**) * 10;
-                entries = realloc(entries, size);
-
-                if (!entries)
-                    error_exit("realloc failed");
-            }
-
-            entries[i - 1] = entry;
-        }
-
-        if (code)
-            break;
-    }
-
-    g_entries     = entries;
-    g_matches     = malloc(size);
-    g_entries_len = i;
-
-    if ( !(g_entries && g_matches) )
-        error_exit("malloc failed");
-
-    memcpy(g_entries, entries, size);
-    freopen("/dev/tty", "r", stdin);
 }
 
 
@@ -239,7 +246,7 @@ int main(void) {
     if (g_terminal == -1)
         error_exit("open failed");
 
-    read_entires();
+    read_entries();
     get_terminal_height();
     draw("");
     set_terminal_mode();
@@ -282,7 +289,7 @@ int main(void) {
     }
 
 end:
-    clear_screen();
+    // clear_screen();
     restore_terminal_mode();
 
     if (selected_entry)
