@@ -19,8 +19,8 @@
 #define KEY_BACKSPACE 0x7F
 #define USAGE_STR     "usage: cmenu <OUTPUT_FILE>"
 
-#define ERROR_EXIT(msg) \
-    do { puts(msg); exit(EXIT_FAILURE); } while (0)
+
+void error_exit(char*);
 
 
 char** g_entries       = NULL;
@@ -30,6 +30,7 @@ int    g_matches_len   = 0;
 int    g_selected      = 0;
 int    g_height        = 0;
 int    g_terminal      = 0;
+bool   g_term_changed  = false;
 struct termios g_termios_original;
 
 
@@ -92,19 +93,30 @@ void set_terminal_mode(void) {
 
     cfmakeraw(&termios_new);
     tcsetattr(0, TCSANOW, &termios_new);
+    g_term_changed = true;
 }
 
 
-void write_str(int fd, char* str) {
+void termwrite(char* str) {
     int len = strlen(str);
 
-    if (write(fd, str, len) != len)
-        ERROR_EXIT("write failed");
+    if (write(g_terminal, str, len) != len)
+        error_exit("write failed");
+}
+
+
+void error_exit(char* msg) {
+    if (g_term_changed)
+        restore_terminal_mode();
+
+    termwrite(msg);
+    termwrite("\n");
+    exit(EXIT_FAILURE);
 }
 
 
 void clear_screen(void) {
-    write_str(g_terminal, "\x1b[H\x1b[2J\x1b[3J");
+    termwrite("\x1b[H\x1b[2J\x1b[3J");
 }
 
 
@@ -124,7 +136,7 @@ void read_entires(void) {
                 entries = realloc(entries, size);
 
                 if (!entries)
-                    ERROR_EXIT("realloc failed");
+                    error_exit("realloc failed");
             }
 
             entries[i - 1] = entry;
@@ -139,7 +151,7 @@ void read_entires(void) {
     g_entries_len = i;
 
     if ( !(g_entries && g_matches) )
-        ERROR_EXIT("malloc failed");
+        error_exit("malloc failed");
 
     memcpy(g_entries, entries, size);
     freopen("/dev/tty", "r", stdin);
@@ -175,9 +187,9 @@ void draw(char* pattern) {
     set_selected_clamped(g_selected);
     clear_screen();
 
-    write_str(g_terminal, ">");
-    write_str(g_terminal, pattern);
-    write_str(g_terminal, "\n");
+    termwrite(">");
+    termwrite(pattern);
+    termwrite("\n");
 
     if (g_selected > g_height - 3) {
         i = g_selected - (g_height - 3);
@@ -189,8 +201,8 @@ void draw(char* pattern) {
         if (++j == g_height - 1)
             break;
 
-        write_str(g_terminal, g_matches[i]);
-        write_str(g_terminal, i == g_selected ? " (*)\n" : "\n");
+        termwrite(g_matches[i]);
+        termwrite(i == g_selected ? " (*)\n" : "\n");
     }
 }
 
@@ -225,7 +237,7 @@ int main(void) {
     g_terminal = open("/dev/tty", O_RDWR);
 
     if (g_terminal == -1)
-        ERROR_EXIT("open failed");
+        error_exit("open failed");
 
     read_entires();
     get_terminal_height();
@@ -256,7 +268,7 @@ int main(void) {
             if (ch_isvalid(ch)) {
                 pattern[pattern_len++] = ch;
                 if (pattern_len >= PATTERN_MAX - 1)
-                    ERROR_EXIT("pattern too long");
+                    error_exit("pattern too long");
 
                 pattern[pattern_len] = '\0';
             } else {
@@ -274,7 +286,7 @@ end:
     restore_terminal_mode();
 
     if (selected_entry)
-        write_str(STDOUT_FILENO, selected_entry);
+        puts(selected_entry);
 
     return EXIT_SUCCESS;
 }
