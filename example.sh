@@ -1,6 +1,6 @@
 #!/bin/sh
 
-output=$(./cmenu output.txt < "colors.txt")
+output=$(./cmenu < "colors.txt")
 
 if [ "$output" = "blue" ]
 then
