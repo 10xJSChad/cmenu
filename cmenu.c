@@ -17,8 +17,6 @@
 #define KEY_CTRLC     0x03
 #define KEY_BACKSPACE 0x7F
 
-#define USAGE_STR     "usage: cmenu <OUTPUT_FILE>"
-
 
 void error_exit(char*);
 
